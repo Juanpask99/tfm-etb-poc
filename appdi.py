@@ -7,17 +7,11 @@ Original file is located at
     https://colab.research.google.com/drive/1EAjXblIc4G5ZApnUnAi_7LhZpZz7pfr1
 """
 
-
-
-"""Fase 2: El Script Unificado (app.py)
-Este es el código completo de tu aplicación. Puedes guardarlo como app.py si corres localmente
-
-"""
-
 import streamlit as st
 from google.cloud import documentai
 import os
 import io
+import json  # <-- ¡LA LÍNEA QUE FALTABA!
 
 # --- Función Principal de Procesamiento ---
 def process_document(project_id, location, processor_id, file_content, mime_type, key_content):
@@ -25,10 +19,10 @@ def process_document(project_id, location, processor_id, file_content, mime_type
     Función para procesar un documento usando la API de Document AI.
     Ahora también acepta el contenido de la clave JSON.
     """
-
+    
     # Opciones de cliente para la API (regional)
     opts = {"api_endpoint": f"{location}-documentai.googleapis.com"}
-
+    
     try:
         # Cargar las credenciales desde el contenido del archivo JSON
         client = documentai.DocumentProcessorServiceClient.from_service_account_info(
@@ -55,17 +49,17 @@ def process_document(project_id, location, processor_id, file_content, mime_type
         # Enviar la solicitud de procesamiento
         result = client.process_document(request=request)
         document = result.document
-
+        
         # Extraer las entidades (los datos que etiquetaste)
         extracted_data = {}
         for entity in document.entities:
             key = entity.type_
             #.mention_text es el texto real extraído
-            value = entity.mention_text.strip()
+            value = entity.mention_text.strip() 
             extracted_data[key] = value
 
         return extracted_data, document.text
-
+        
     except Exception as e:
         st.error(f"Error al conectar con la API de Document AI: {e}")
         return None, None
@@ -79,8 +73,8 @@ st.subheader("Extracción Inteligente de Datos de Contratos con Google Document 
 # --- Barra Lateral (Sidebar) para Configuración ---
 st.sidebar.header("Configuración de GCP")
 st.sidebar.markdown("""
-Esta PoC se conecta al Extractor Personalizado que entrenaste
-en Document AI Workbench.[1]
+Esta PoC se conecta al Extractor Personalizado que entrenaste 
+en Document AI Workbench. [1]
 """)
 
 # Campos para que el usuario ingrese sus credenciales de GCP
@@ -98,7 +92,7 @@ st.markdown("---")
 
 # 2. Botón de procesamiento
 if st.button("Procesar Contrato"):
-
+    
     # Validaciones
     if not gcp_project_id:
         st.error("Error: Falta el Project ID de GCP en la barra lateral.")
@@ -115,13 +109,13 @@ if st.button("Procesar Contrato"):
             # --- Autenticación ---
             # Decodificar el contenido del archivo JSON subido
             key_dict = json.load(io.StringIO(uploaded_key.getvalue().decode("utf-8")))
-
+            
             # --- Procesamiento ---
             st.info("Procesando documento... contactando a Google Document AI.")
-
+            
             # Leer los bytes del archivo subido
             contract_bytes = uploaded_contract.read()
-
+            
             # Llamar a la función principal
             extracted_data, full_text = process_document(
                 project_id=gcp_project_id,
@@ -131,25 +125,25 @@ if st.button("Procesar Contrato"):
                 mime_type="application/pdf",
                 key_content=key_dict  # Pasamos el diccionario de la clave
             )
-
+            
             # --- Mostrar Resultados ---
             if extracted_data is not None:
                 st.success("¡Documento procesado con éxito!")
-
+                
                 col1, col2 = st.columns(2)
-
+                
                 with col1:
                     st.subheader("Datos Estructurados Extraídos")
                     st.markdown("""
-                    Estos son los campos clave que tu modelo de IA
-                    identificó y extrajo.[2, 3]
+                    Estos son los campos clave que tu modelo de IA 
+                    identificó y extrajo. [2, 3]
                     """)
                     st.json(extracted_data)
                     st.markdown("""
                     **Valor para el TFM:** Esta salida JSON es el dato
-                    estructurado que alimentaría los dashboards de BI
-                    para los reportes de cumplimiento
-                    automáticos.[4, 5]
+                    estructurado que alimentaría los dashboards de BI 
+                    para los reportes de cumplimiento 
+                    automáticos. [4, 5]
                     """)
 
                 with col2:
@@ -159,4 +153,3 @@ if st.button("Procesar Contrato"):
 
         except Exception as e:
             st.error(f"Ocurrió un error general: {e}")
-
