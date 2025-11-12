@@ -11,145 +11,177 @@ import streamlit as st
 from google.cloud import documentai
 import os
 import io
-import json  # <-- ¡LA LÍNEA QUE FALTABA!
+import json
 
-# --- Función Principal de Procesamiento ---
-def process_document(project_id, location, processor_id, file_content, mime_type, key_content):
+# --- FUNCIÓN DE API GENÉRICA ---
+# Esta función ahora solo se encarga de llamar a un procesador de DocAI
+# Puede ser un clasificador O un extractor, por eso es genérica.
+def process_document_api(project_id, location, processor_id, file_content, mime_type, key_content):
     """
-    Función para procesar un documento usando la API de Document AI.
-    Ahora también acepta el contenido de la clave JSON.
+    Función genérica para llamar a cualquier procesador de Document AI.
+    Devuelve el objeto 'document' completo.
     """
     
-    # Opciones de cliente para la API (regional)
     opts = {"api_endpoint": f"{location}-documentai.googleapis.com"}
     
     try:
-        # Cargar las credenciales desde el contenido del archivo JSON
         client = documentai.DocumentProcessorServiceClient.from_service_account_info(
             key_content, client_options=opts
         )
     except Exception as e:
         st.error(f"Error al cargar las credenciales de GCP. Asegúrate de que el JSON es correcto. Detalle: {e}")
-        return None, None
+        return None
 
-    # El nombre completo del recurso del procesador
     processor_name = client.processor_path(project_id, location, processor_id)
-
-    # Cargar el contenido del archivo en la solicitud
-    raw_document = documentai.RawDocument(
-        content=file_content, mime_type=mime_type
-    )
-
-    # Configurar la solicitud a la API
-    request = documentai.ProcessRequest(
-        name=processor_name, raw_document=raw_document
-    )
+    raw_document = documentai.RawDocument(content=file_content, mime_type=mime_type)
+    request = documentai.ProcessRequest(name=processor_name, raw_document=raw_document)
 
     try:
-        # Enviar la solicitud de procesamiento
         result = client.process_document(request=request)
-        document = result.document
-        
-        # Extraer las entidades (los datos que etiquetaste)
-        extracted_data = {}
-        for entity in document.entities:
-            key = entity.type_
-            #.mention_text es el texto real extraído
-            value = entity.mention_text.strip() 
-            extracted_data[key] = value
-
-        return extracted_data, document.text
+        return result.document
         
     except Exception as e:
         st.error(f"Error al conectar con la API de Document AI: {e}")
-        return None, None
+        return None
+
+# --- FUNCIÓN PARA PARSEAR ENTIDADES EXTRAÍDAS ---
+def parse_extracted_entities(document):
+    """
+    Toma un documento procesado por un EXTRACTOR
+    y convierte sus entidades en un JSON (dict) limpio.
+    """
+    extracted_data = {}
+    if document is None or not document.entities:
+        return extracted_data
+        
+    for entity in document.entities:
+        key = entity.type_
+        value = entity.mention_text.strip()
+        # Maneja el caso de que una misma entidad (ej. 'items_comprados') aparezca varias veces
+        if key in extracted_data:
+            if isinstance(extracted_data[key], list):
+                extracted_data[key].append(value)
+            else:
+                extracted_data[key] = [extracted_data[key], value]
+        else:
+            extracted_data[key] = value
+            
+    return extracted_data
 
 # --- Interfaz de Streamlit ---
 
 st.set_page_config(layout="wide")
-st.title("Prueba de Concepto (PoC) TFM - ETB")
-st.subheader("Extracción Inteligente de Datos de Contratos con Google Document AI")
+st.title("Prueba de Concepto (PoC) TFM - ETB (Versión 2.0)")
+st.subheader("Pipeline de Clasificación y Extracción con Google Document AI")
 
 # --- Barra Lateral (Sidebar) para Configuración ---
 st.sidebar.header("Configuración de GCP")
 st.sidebar.markdown("""
-Esta PoC se conecta al Extractor Personalizado que entrenaste 
-en Document AI Workbench. [1]
+Esta PoC demuestra un pipeline de 2 pasos:
+1.  **Clasificación:** Identifica el tipo de documento.
+2.  **Extracción:** Aplica el modelo especialista correcto.
 """)
 
-# Campos para que el usuario ingrese sus credenciales de GCP
-gcp_project_id = st.sidebar.text_input("1. Project ID de GCP:")
-gcp_location = st.sidebar.text_input("2. Location del Procesador (ej: us o eu):", "us")
-gcp_processor_id = st.sidebar.text_input("3. Processor ID del Extractor:")
-uploaded_key = st.sidebar.file_uploader("4. Sube tu JSON Key de Service Account:", type=["json"])
+st.sidebar.subheader("Credenciales Comunes")
+gcp_project_id = st.sidebar.text_input("1. Project ID de GCP:", help="El ID de tu proyecto de GCP, ej: 'sapient-hub-123456'")
+gcp_location = st.sidebar.text_input("2. Location de los Procesadores (ej: us):", "us")
+uploaded_key = st.sidebar.file_uploader("3. Sube tu JSON Key de Service Account:", type=["json"])
+
+st.sidebar.subheader("Procesadores Especialistas")
+# IDs para cada uno de tus modelos entrenados en Document AI Workbench [1]
+gcp_classifier_id = st.sidebar.text_input("4. Processor ID del CLASIFICADOR:", help="El ID de tu 'Custom Classifier'")
+gcp_contract_extractor_id = st.sidebar.text_input("5. Processor ID del Extractor de CONTRATOS:", help="El ID de tu 'Custom Extractor' para contratos")
+gcp_invoice_extractor_id = st.sidebar.text_input("6. Processor ID del Extractor de FACTURAS:", help="El ID de tu 'Custom Extractor' para facturas")
+
 
 # --- Área Principal de la Aplicación ---
-
-# 1. Carga del contrato
-uploaded_contract = st.file_uploader("Carga tu contrato de muestra aquí (PDF):", type=["pdf"])
+uploaded_doc = st.file_uploader("Carga tu documento (Contrato, Factura, etc.):", type=["pdf"])
 
 st.markdown("---")
 
-# 2. Botón de procesamiento
-if st.button("Procesar Contrato"):
+if st.button("Procesar Documento (Clasificar y Extraer)"):
     
     # Validaciones
-    if not gcp_project_id:
-        st.error("Error: Falta el Project ID de GCP en la barra lateral.")
-    elif not gcp_location:
-        st.error("Error: Falta la Location del procesador en la barra lateral.")
-    elif not gcp_processor_id:
-        st.error("Error: Falta el Processor ID en la barra lateral.")
+    if not all([gcp_project_id, gcp_location, gcp_classifier_id, gcp_contract_extractor_id, gcp_invoice_extractor_id]):
+        st.error("Error: Faltan uno o más IDs de procesador en la barra lateral.")
     elif uploaded_key is None:
-        st.error("Error: Sube el archivo JSON de la cuenta de servicio en la barra lateral.")
-    elif uploaded_contract is None:
-        st.error("Error: Sube un archivo PDF del contrato.")
+        st.error("Error: Sube el archivo JSON de la cuenta de servicio.")
+    elif uploaded_doc is None:
+        st.error("Error: Sube un archivo PDF.")
     else:
         try:
             # --- Autenticación ---
-            # Decodificar el contenido del archivo JSON subido
             key_dict = json.load(io.StringIO(uploaded_key.getvalue().decode("utf-8")))
+            doc_bytes = uploaded_doc.read()
             
-            # --- Procesamiento ---
-            st.info("Procesando documento... contactando a Google Document AI.")
+            # --- PASO 1: CLASIFICACIÓN ---
+            st.info(f"**Paso 1:** Clasificando documento... (Llamando al Procesador: {gcp_classifier_id[:10]}...)")
             
-            # Leer los bytes del archivo subido
-            contract_bytes = uploaded_contract.read()
-            
-            # Llamar a la función principal
-            extracted_data, full_text = process_document(
+            classifier_doc = process_document_api(
                 project_id=gcp_project_id,
                 location=gcp_location,
-                processor_id=gcp_processor_id,
-                file_content=contract_bytes,
+                processor_id=gcp_classifier_id,
+                file_content=doc_bytes,
                 mime_type="application/pdf",
-                key_content=key_dict  # Pasamos el diccionario de la clave
+                key_content=key_dict
             )
             
-            # --- Mostrar Resultados ---
-            if extracted_data is not None:
-                st.success("¡Documento procesado con éxito!")
+            if classifier_doc is None or not classifier_doc.entities:
+                st.error("Error en la clasificación. El clasificador no devolvió entidades.")
+            else:
+                # El clasificador devuelve la mejor coincidencia como una entidad
+                # Ordenamos por confianza y tomamos la más alta
+                classification = max(classifier_doc.entities, key=lambda e: e.confidence)
+                doc_type = classification.type_
+                doc_confidence = classification.confidence
                 
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.subheader("Datos Estructurados Extraídos")
-                    st.markdown("""
-                    Estos son los campos clave que tu modelo de IA 
-                    identificó y extrajo. [2, 3]
-                    """)
-                    st.json(extracted_data)
-                    st.markdown("""
-                    **Valor para el TFM:** Esta salida JSON es el dato
-                    estructurado que alimentaría los dashboards de BI 
-                    para los reportes de cumplimiento 
-                    automáticos. [4, 5]
-                    """)
+                st.success(f"**Paso 1 Completado:** Documento identificado como: **{doc_type}** (Confianza: {doc_confidence:.2%})")
 
-                with col2:
-                    st.subheader("Texto Completo (OCR)")
-                    st.markdown("Este es el texto completo extraído del documento.")
-                    st.text_area("Texto OCR", full_text, height=400)
+                # --- PASO 2: EXTRACCIÓN (Routing) ---
+                processor_to_use = None
+                
+                # Lógica de enrutamiento basada en el resultado de la clasificación
+                if doc_type == "contrato": # Asegúrate que 'contrato' coincida con la etiqueta de tu clasificador
+                    processor_to_use = gcp_contract_extractor_id
+                elif doc_type == "factura": # Asegúrate que 'factura' coincida con la etiqueta de tu clasificador
+                    processor_to_use = gcp_invoice_extractor_id
+                else:
+                    st.warning(f"No se ha configurado un extractor para el tipo de documento: '{doc_type}'")
+
+                if processor_to_use:
+                    st.info(f"**Paso 2:** Extrayendo datos para '{doc_type}'... (Llamando al Procesador: {processor_to_use[:10]}...)")
+
+                    extractor_doc = process_document_api(
+                        project_id=gcp_project_id,
+                        location=gcp_location,
+                        processor_id=processor_to_use,
+                        file_content=doc_bytes,
+                        mime_type="application/pdf",
+                        key_content=key_dict
+                    )
+                    
+                    if extractor_doc:
+                        st.success(f"**Paso 2 Completado:** ¡Extracción finalizada!")
+                        
+                        # Parsear los resultados del extractor
+                        extracted_data = parse_extracted_entities(extractor_doc)
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.subheader(f"Datos Estructurados Extraídos ({doc_type})")
+                            st.json(extracted_data)
+                            st.markdown("""
+                            **Valor para el TFM:** Esta salida JSON es el dato
+                            estructurado que alimentaría a BigQuery para los reportes 
+                            automáticos en Looker.
+                            """)
+
+                        with col2:
+                            st.subheader("Texto Completo (OCR)")
+                            st.text_area("Texto OCR", extractor_doc.text, height=400)
+                    else:
+                        st.error("Error durante la fase de extracción.")
 
         except Exception as e:
+            st.error(f"Ocurrió un error general: {e}")
             st.error(f"Ocurrió un error general: {e}")
