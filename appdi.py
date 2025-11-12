@@ -71,7 +71,7 @@ def parse_extracted_entities(document):
 # --- Interfaz de Streamlit ---
 
 st.set_page_config(layout="wide")
-st.title("Prueba de Concepto (PoC) TFM - ETB (Versión 2.0)")
+st.title("Prueba de Concepto (PoC) TFM - ETB (Versión 3.0)")
 st.subheader("Pipeline de Clasificación y Extracción con Google Document AI")
 
 # --- Barra Lateral (Sidebar) para Configuración ---
@@ -92,17 +92,19 @@ st.sidebar.subheader("Procesadores Especialistas")
 gcp_classifier_id = st.sidebar.text_input("4. Processor ID del CLASIFICADOR:", help="El ID de tu 'Custom Classifier'")
 gcp_contract_extractor_id = st.sidebar.text_input("5. Processor ID del Extractor de CONTRATOS:", help="El ID de tu 'Custom Extractor' para contratos")
 gcp_invoice_extractor_id = st.sidebar.text_input("6. Processor ID del Extractor de FACTURAS:", help="El ID de tu 'Custom Extractor' para facturas")
+# --- NUEVO CAMPO AÑADIDO ---
+gcp_acta_extractor_id = st.sidebar.text_input("7. Processor ID del Extractor de ACTAS:", help="El ID de tu 'Custom Extractor' para actas de entrega")
 
 
 # --- Área Principal de la Aplicación ---
-uploaded_doc = st.file_uploader("Carga tu documento (Contrato, Factura, etc.):", type=["pdf"])
+uploaded_doc = st.file_uploader("Carga tu documento (Contrato, Factura, Acta, etc.):", type=["pdf"])
 
 st.markdown("---")
 
 if st.button("Procesar Documento (Clasificar y Extraer)"):
     
-    # Validaciones
-    if not all([gcp_project_id, gcp_location, gcp_classifier_id, gcp_contract_extractor_id, gcp_invoice_extractor_id]):
+    # Validaciones (actualizada para incluir el nuevo ID)
+    if not all([gcp_project_id, gcp_location, gcp_classifier_id, gcp_contract_extractor_id, gcp_invoice_extractor_id, gcp_acta_extractor_id]):
         st.error("Error: Faltan uno o más IDs de procesador en la barra lateral.")
     elif uploaded_key is None:
         st.error("Error: Sube el archivo JSON de la cuenta de servicio.")
@@ -140,11 +142,15 @@ if st.button("Procesar Documento (Clasificar y Extraer)"):
                 # --- PASO 2: EXTRACCIÓN (Routing) ---
                 processor_to_use = None
                 
-                # Lógica de enrutamiento basada en el resultado de la clasificación
-                if doc_type == "contrato": # Asegúrate que 'contrato' coincida con la etiqueta de tu clasificador
+                # --- LÓGICA DE ENRUTAMIENTO ACTUALIZADA ---
+                # Asegúrate que las etiquetas 'contrato', 'factura', y 'acta' coincidan
+                # exactamente con las que definiste en tu Clasificador en GCP.
+                if doc_type == "contrato": 
                     processor_to_use = gcp_contract_extractor_id
-                elif doc_type == "factura": # Asegúrate que 'factura' coincida con la etiqueta de tu clasificador
+                elif doc_type == "factura": 
                     processor_to_use = gcp_invoice_extractor_id
+                elif doc_type == "acta": 
+                    processor_to_use = gcp_acta_extractor_id
                 else:
                     st.warning(f"No se ha configurado un extractor para el tipo de documento: '{doc_type}'")
 
@@ -183,5 +189,4 @@ if st.button("Procesar Documento (Clasificar y Extraer)"):
                         st.error("Error durante la fase de extracción.")
 
         except Exception as e:
-            st.error(f"Ocurrió un error general: {e}")
             st.error(f"Ocurrió un error general: {e}")
